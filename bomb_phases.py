@@ -1,37 +1,43 @@
 #################################
 # CSC 102 Defuse the Bomb Project
 # GUI and Phase class definitions
-# Team: Gabriel Chiaravalloti, Bryan Miranda-Cruz, Christian Badenhausen
+# Team:
 #################################
 
 # import the configs
 from bomb_configs import *
 # other imports
 from tkinter import *
-import tkinter as tk
-from threading import Thread, Event
+from tkinter import ttk
+import tkinter
+from threading import Thread
 from time import sleep
 import os
 import sys
-import pygame
-KEYPAD_DEFUSED_EVENT = Event()
 
+####
+#Room enviroment
+###
+class Room(Frame):
+    def __init__(self, parent, phase_name, bg_color="black", bg_image=None):
+        super().__init__(parent, bg=bg_color)
+        self.phase_name = phase_name
+        self.bg_image = bg_image
+
+        if bg_image:
+            self._bg_img = PhotoImage(file=bg_image)
+            self._bg_label = Label(self, image=self._bg_img)
+            self._bg_label.place(relwidth=1, relheight=1)
+
+        # Title of the phase
+        self._title = Label(self, text=phase_name, bg=bg_color, fg="cyan", font=("Courier New", 24))
+        self._title.pack(pady=20)
+
+        self.pack(fill=BOTH, expand=True)
 #########
 # classes
 #########
-# the LCD display GUI & Music
-
-pygame.init()
-
-'''pygame.mixer.music.load("Tank!.mp3")
-#-1 is forever, 1 is once. 
-pygame.mixer.music.play(-1)
-
-if (pygame.mixer.music.get_busy()):
-    pass'''
-
-    
-    
+# the LCD display GUI
 class Lcd(Frame):
     def __init__(self, window):
         super().__init__(window, bg="black")
@@ -43,6 +49,26 @@ class Lcd(Frame):
         self._button = None
         # setup the initial "boot" GUI
         self.setupBoot()
+        #for x flash whenever the player fails a phase
+        self.rooms = {}
+
+    def flashX(self):
+        def _flash():
+            for _ in range(6):  # flashes 3 times
+                self._x_label.grid()  # show
+                sleep(0.2)
+                self._x_label.grid_remove()  # hide
+                sleep(0.2)
+                Thread(target=_flash, daemon=True).start()
+
+    def showFuse(self, time_left, total_time):
+        bar_len = 16
+        filled = int((time_left / total_time) * bar_len)
+        fuse = "█" * filled + "-" * (bar_len - filled)
+
+        self._lfuse["text"] = f"FUSE: {fuse}"
+
+
 
     # sets up the LCD "boot" GUI
     def setupBoot(self):
@@ -72,9 +98,11 @@ class Lcd(Frame):
         # the toggle switches status
         self._ltoggles = Label(self, bg="black", fg="#00ff00", font=("Courier New", 18), text="Toggles phase: ")
         self._ltoggles.grid(row=5, column=0, columnspan=2, sticky=W)
-        # the strikes left
-        self._lstrikes = Label(self, bg="black", fg="#00ff00", font=("Courier New", 18), text="Strikes left: ")
-        self._lstrikes.grid(row=5, column=2, sticky=W)
+        #Adding red X marks so the player can visual see how many strikes they have left
+        self._lstrikes = Label(self, bg="black", fg="red", font=("Courier New", 18),
+                             text=f"Strikes left: {'❌' * NUM_STRIKES}")
+        self._lstrikes.grid(row=6, column=0, columnspan=3, sticky=W)
+
         if (SHOW_BUTTONS):
             # the pause button (pauses the timer)
             self._bpause = tkinter.Button(self, bg="red", fg="white", font=("Courier New", 18), text="Pause", anchor=CENTER, command=self.pause)
@@ -82,11 +110,33 @@ class Lcd(Frame):
             # the quit button
             self._bquit = tkinter.Button(self, bg="red", fg="white", font=("Courier New", 18), text="Quit", anchor=CENTER, command=self.quit)
             self._bquit.grid(row=6, column=2, pady=40)
+        #xmark image for when the player gets a strike an x image will flash the screen
+        self._x_img = PhotoImage(file="x_mark.png")
+        self._x_label = Label(self, image=self._x_img, bg="black")
+        self._x_label.grid(row=7, column=1)
+        self._x_label.grid_remove()
+        #For timer countdown bar grid. Helps players visual how much time they have left
+        self._timer_bar = ttk.Progressbar(self, orient="horizontal", length=400, mode="determinate")
+        self._timer_bar.grid(row=1, column=0, columnspan=3, sticky=W)
+        #For the fuse
+        self._lfuse = Label(self, bg="black", fg="yellow", font=("Arial", 18), text="FUSE: ")
+        self._lfuse.grid(row=1, column=2, sticky=E)
+
+    #Display the current phase room
+    def show_room(self, room_name):
+        if room_name in self.rooms:
+            self.rooms[room_name].tkraise()
+
+    def setupRooms(self, parent):
+        # create Room objects for each phase
+        for phase, img in PHASE_ROOMS.items():
+            room = Room(parent, phase.capitalize() + " Room", bg_color="black", bg_image=img)
+            room.place(x=0, y=0, relwidth=1, relheight=1)
+            self.rooms[phase] = room
 
     # lets us pause/unpause the timer (7-segment display)
     def setTimer(self, timer):
         self._timer = timer
-
     # lets us turn off the pushbutton's RGB LED
     def setButton(self, button):
         self._button = button
@@ -227,79 +277,35 @@ class Keypad(PhaseThread):
                 # the combination is correct -> phase defused
                 if (self._value == self._target):
                     self._defused = True
-                    KEYPAD_DEFUSED_EVENT.set()
-                    self._running = False
                 # the combination is incorrect -> phase failed (strike)
                 elif (self._value != self._target[0:len(self._value)]):
                     self._failed = True
-                    self._running = False
             sleep(0.1)
 
     # returns the keypad combination as a string
     def __str__(self):
         if (self._defused):
-            return "Trivia"
+            return "DEFUSED"
         else:
             return self._value
 
 # the jumper wires phase
 class Wires(PhaseThread):
-    def __init__(self, component, target_order, name="Wires"):
-        super().__init__(name, component, target_order)
-        # track wires actually pulled (for debugging / display, if desired)
-        self._value = []
-        # index into self._target: which wire we expect next
-        self._expected_index = 0
+    def __init__(self, component, target, name="Wires"):
+        super().__init__(name, component, target)
 
     # runs the thread
     def run(self):
-        self._running = True
-        while self._running:
-            # If any wire was pulled
-            if self._component.pulled_wires:
-                # Debounce — wait until user stops pulling
-                while self._component.pulled_wires:
-                    try:
-                        # grab the first pulled wire
-                        wire = self._component.pulled_wires[0]
-                    except:
-                        wire = None
-                    sleep(0.1)
+        # TODO
+        pass
 
-                if wire is not None:
-                    # record it (optional)
-                    self._value.append(wire)
-
-                    # what wire did we expect at this step?
-                    expected_wire = self._target[self._expected_index]
-
-                    # Correct wire pulled?
-                    if wire == expected_wire:
-                        self._expected_index += 1
-
-                        # all wires pulled in correct order
-                        if self._expected_index >= len(self._target):
-                            self._defused = True
-                            # stop the thread loop
-                            self._running = False
-                    else:
-                        # Wrong wire -> phase failed (boom / strike)
-                        self._failed = True
-                        # stop the thread loop
-                        self._running = False
-
-            sleep(0.1)
-
-    # returns the wires status as a string
+    # returns the jumper wires state as a string
     def __str__(self):
-        if self._defused:
+        if (self._defused):
             return "DEFUSED"
         else:
-            # guard against index-out-of-range if we already failed
-            if self._failed or self._expected_index >= len(self._target):
-                return "FAILED"
-            return f"Next wire: {self._target[self._expected_index]}"
-
+            # TODO
+            pass
 
 # the pushbutton phase
 class Button(PhaseThread):
@@ -316,6 +322,7 @@ class Button(PhaseThread):
         # we need to know about the timer (7-segment display) to be able to determine correct pushbutton releases in some cases
         self._timer = timer
 
+
     # runs the thread
     def run(self):
         self._running = True
@@ -330,10 +337,6 @@ class Button(PhaseThread):
             if (self._value):
                 # note it
                 self._pressed = True
-                try:
-                    color_ninja_button_press()
-                except:
-                    pass
             # it is released
             else:
                 # was it previously pressed?
@@ -361,44 +364,15 @@ class Toggles(PhaseThread):
     def __init__(self, component, target, name="Toggles"):
         super().__init__(name, component, target)
 
+    # runs the thread
     def run(self):
-        self._running = True
+        # TODO
+        pass
 
-        # wait until the Keypad phase is defused before allowing Toggles to be solved
-        KEYPAD_DEFUSED_EVENT.wait()
-
-        while self._running:
-            self._value, self._bits = self._read_value()
-
-            if (self._value == self._target):
-                self._defused = True
-                self._running = False
-
-            sleep(0.1)
-
-    def _read_value(self):
-        # Treat each toggle as a bit (MSB -> LSB)
-        try:
-            switches = list(self._component)
-        except TypeError:
-            switches = [self._component]
-
-        bits = []
-        for sw in switches:
-            v = getattr(sw, "value", sw)
-            bits.append(1 if bool(v) else 0)
-
-        value = 0
-        for b in bits:
-            value = (value << 1) | b
-
-        bit_str = "".join(str(b) for b in bits)
-        return value, bit_str
-
+    # returns the toggle switches state as a string
     def __str__(self):
-        if (not KEYPAD_DEFUSED_EVENT.is_set()):
-            return "LOCKED"
         if (self._defused):
             return "DEFUSED"
-        return f"{getattr(self,'_bits','')}={getattr(self,'_value','')}"
-
+        else:
+            # TODO
+            pass
